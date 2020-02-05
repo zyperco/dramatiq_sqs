@@ -62,18 +62,21 @@ class SQSBroker(dramatiq.Broker):
     """
 
     def __init__(
-            self, *,
-            namespace: Optional[str] = None,
-            middleware: Optional[List[dramatiq.Middleware]] = None,
-            retention: int = MAX_MESSAGE_RETENTION,
-            dead_letter: bool = False,
-            max_receives: int = MAX_RECEIVES,
-            **options,
+        self,
+        *,
+        namespace: Optional[str] = None,
+        middleware: Optional[List[dramatiq.Middleware]] = None,
+        retention: int = MAX_MESSAGE_RETENTION,
+        dead_letter: bool = False,
+        max_receives: int = MAX_RECEIVES,
+        **options,
     ) -> None:
         super().__init__(middleware=middleware)
 
         if retention < MIN_MESSAGE_RETENTION or retention > MAX_MESSAGE_RETENTION:
-            raise ValueError(f"'retention' must be between {MIN_MESSAGE_RETENTION} and {MAX_MESSAGE_RETENTION}.")
+            raise ValueError(
+                f"'retention' must be between {MIN_MESSAGE_RETENTION} and {MAX_MESSAGE_RETENTION}."
+            )
 
         self.namespace: str = namespace
         self.retention: str = str(retention)
@@ -82,7 +85,9 @@ class SQSBroker(dramatiq.Broker):
         self.max_receives: int = max_receives
         self.sqs: Any = boto3.resource("sqs", **options)
 
-    def consume(self, queue_name: str, prefetch: int = 1, timeout: int = 30000) -> dramatiq.Consumer:
+    def consume(
+        self, queue_name: str, prefetch: int = 1, timeout: int = 30000
+    ) -> dramatiq.Consumer:
         try:
             return _SQSConsumer(self.queues[queue_name], prefetch, timeout)
         except KeyError:  # pragma: no cover
@@ -100,9 +105,7 @@ class SQSBroker(dramatiq.Broker):
             self.emit_before("declare_queue", queue_name)
             self.queues[queue_name] = self.sqs.create_queue(
                 QueueName=prefixed_queue_name,
-                Attributes={
-                    "MessageRetentionPeriod": self.retention,
-                }
+                Attributes={"MessageRetentionPeriod": self.retention,},
             )
             if self.dead_letter:
                 dead_letter_queue_name = f"{prefixed_queue_name}_dlq"
@@ -111,42 +114,46 @@ class SQSBroker(dramatiq.Broker):
                 )
                 redrive_policy = {
                     "deadLetterTargetArn": dead_letter_queue.attributes["QueueArn"],
-                    "maxReceiveCount": str(self.max_receives)
+                    "maxReceiveCount": str(self.max_receives),
                 }
-                self.queues[queue_name].set_attributes(Attributes={
-                    "RedrivePolicy": json.dumps(redrive_policy)
-                })
+                self.queues[queue_name].set_attributes(
+                    Attributes={"RedrivePolicy": json.dumps(redrive_policy)}
+                )
             self.emit_after("declare_queue", queue_name)
 
-    def enqueue(self, message: dramatiq.Message, *, delay: Optional[int] = None) -> dramatiq.Message:
+    def enqueue(
+        self, message: dramatiq.Message, *, delay: Optional[int] = None
+    ) -> dramatiq.Message:
         queue_name = message.queue_name
         queue = self.queues[queue_name]
         queue_url = queue.url
 
-        if not queue_url.endswith('.fifo'):
+        if not queue_url.endswith(".fifo"):
             if delay is None:
                 delay_seconds = 0
             elif delay <= 900000:
                 delay_seconds = int(delay / 1000)
             else:
-                raise ValueError("Messages in SQS cannot be delayed for longer than 15 minutes.")
+                raise ValueError(
+                    "Messages in SQS cannot be delayed for longer than 15 minutes."
+                )
 
         encoded_message = b64encode(message.encode()).decode()
         if len(encoded_message) > MAX_MESSAGE_SIZE:
             raise RuntimeError("Messages in SQS can be at most 256KiB large.")
 
-        self.logger.debug("Enqueueing message %r on queue %r.", message.message_id, queue_name)
+        self.logger.debug(
+            "Enqueueing message %r on queue %r.", message.message_id, queue_name
+        )
         self.emit_before("enqueue", message, delay)
 
-        if queue_url.endswith('.fifo'):
+        if queue_url.endswith(".fifo"):
             queue.send_message(
-                MessageBody=encoded_message,
-                MessageGroupId=4,  # 4 is a great number
+                MessageBody=encoded_message, MessageGroupId="4",  # 4 is a great number
             )
         else:
             queue.send_message(
-                MessageBody=encoded_message,
-                DelaySeconds=delay_seconds,
+                MessageBody=encoded_message, DelaySeconds=delay_seconds,
             )
         self.emit_after("enqueue", message, delay)
         return message
@@ -177,20 +184,28 @@ class _SQSConsumer(dramatiq.Consumer):
     def requeue(self, messages: Iterable["_SQSMessage"]) -> None:
         for batch in chunk(messages, chunksize=10):
             # Re-enqueue batches of up to 10 messages.
-            send_response = self.queue.send_messages(Entries=[{
-                "Id": str(i),
-                "MessageBody": message._sqs_message.body,
-            } for i, message in enumerate(batch)])
+            send_response = self.queue.send_messages(
+                Entries=[
+                    {"Id": str(i), "MessageBody": message._sqs_message.body,}
+                    for i, message in enumerate(batch)
+                ]
+            )
 
             # Then delete the ones that were successfully re-enqueued.
             # The rest will have to wait until their visibility
             # timeout expires.
-            failed_message_ids = [int(res["Id"]) for res in send_response.get("Failed", [])]
-            requeued_messages = [m for i, m in enumerate(batch) if i not in failed_message_ids]
-            self.queue.delete_messages(Entries=[{
-                "Id": str(i),
-                "ReceiptHandle": message._sqs_message.receipt_handle,
-            } for i, message in enumerate(requeued_messages)])
+            failed_message_ids = [
+                int(res["Id"]) for res in send_response.get("Failed", [])
+            ]
+            requeued_messages = [
+                m for i, m in enumerate(batch) if i not in failed_message_ids
+            ]
+            self.queue.delete_messages(
+                Entries=[
+                    {"Id": str(i), "ReceiptHandle": message._sqs_message.receipt_handle,}
+                    for i, message in enumerate(requeued_messages)
+                ]
+            )
 
             self.message_refc -= len(requeued_messages)
 
@@ -210,7 +225,9 @@ class _SQSConsumer(dramatiq.Consumer):
                         self.messages.append(_SQSMessage(sqs_message, dramatiq_message))
                         self.message_refc += 1
                     except Exception:  # pragma: no cover
-                        self.logger.exception("Failed to decode message: %r", sqs_message.body)
+                        self.logger.exception(
+                            "Failed to decode message: %r", sqs_message.body
+                        )
 
             try:
                 return self.messages.popleft()
