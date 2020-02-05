@@ -118,25 +118,6 @@ class SQSBroker(dramatiq.Broker):
                 })
             self.emit_after("declare_queue", queue_name)
 
-    def enqueue2(self, message: dramatiq.Message, *, delay: Optional[int] = None) -> dramatiq.Message:
-        queue_name = message.queue_name
-        if delay is None:
-            queue = self.queues[queue_name]
-        # else:
-            # raise ValueError("Messages in SQS FIFO queues cannot be delayed")
-
-        encoded_message = b64encode(message.encode()).decode()
-        if len(encoded_message) > MAX_MESSAGE_SIZE:
-            raise RuntimeError("Messages in SQS can be at most 256KiB large.")
-
-        self.logger.debug("Enqueueing message %r on queue %r.", message.message_id, queue_name)
-        self.emit_before("enqueue", message, delay)
-        queue.send_message(
-            MessageBody=encoded_message,
-        )
-        self.emit_after("enqueue", message, delay)
-        return message
-
     def enqueue(self, message: dramatiq.Message, *, delay: Optional[int] = None) -> dramatiq.Message:
         queue_name = message.queue_name
 
