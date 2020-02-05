@@ -120,15 +120,13 @@ class SQSBroker(dramatiq.Broker):
 
     def enqueue(self, message: dramatiq.Message, *, delay: Optional[int] = None) -> dramatiq.Message:
         queue_name = message.queue_name
+        queue = self.queues[queue_name]
+        queue_url = queue.url
 
-        if queue_name.endswith('.fifo'):
-            queue = self.queues[queue_name]
-        else:
+        if not queue_url.endswith('.fifo'):
             if delay is None:
-                queue = self.queues[queue_name]
                 delay_seconds = 0
             elif delay <= 900000:
-                queue = self.queues[queue_name]
                 delay_seconds = int(delay / 1000)
             else:
                 raise ValueError("Messages in SQS cannot be delayed for longer than 15 minutes.")
@@ -140,7 +138,7 @@ class SQSBroker(dramatiq.Broker):
         self.logger.debug("Enqueueing message %r on queue %r.", message.message_id, queue_name)
         self.emit_before("enqueue", message, delay)
 
-        if queue_name.endswith('.fifo'):
+        if queue_url.endswith('.fifo'):
             queue.send_message(
                 MessageBody=encoded_message,
                 MessageGroupId=4,  # 4 is a great number
