@@ -118,16 +118,12 @@ class SQSBroker(dramatiq.Broker):
                 })
             self.emit_after("declare_queue", queue_name)
 
-    def enqueue(self, message: dramatiq.Message, *, delay: Optional[int] = None) -> dramatiq.Message:
+    def enqueue2(self, message: dramatiq.Message, *, delay: Optional[int] = None) -> dramatiq.Message:
         queue_name = message.queue_name
         if delay is None:
             queue = self.queues[queue_name]
-            delay_seconds = 0
-        elif delay <= 900000:
-            queue = self.queues[queue_name]
-            delay_seconds = int(delay / 1000)
-        else:
-            raise ValueError("Messages in SQS cannot be delayed for longer than 15 minutes.")
+        # else:
+            # raise ValueError("Messages in SQS FIFO queues cannot be delayed")
 
         encoded_message = b64encode(message.encode()).decode()
         if len(encoded_message) > MAX_MESSAGE_SIZE:
@@ -137,8 +133,42 @@ class SQSBroker(dramatiq.Broker):
         self.emit_before("enqueue", message, delay)
         queue.send_message(
             MessageBody=encoded_message,
-            DelaySeconds=delay_seconds,
         )
+        self.emit_after("enqueue", message, delay)
+        return message
+
+    def enqueue(self, message: dramatiq.Message, *, delay: Optional[int] = None) -> dramatiq.Message:
+        queue_name = message.queue_name
+
+        if queue_name.endswith('.fifo'):
+            queue = self.queues[queue_name]
+        else:
+            if delay is None:
+                queue = self.queues[queue_name]
+                delay_seconds = 0
+            elif delay <= 900000:
+                queue = self.queues[queue_name]
+                delay_seconds = int(delay / 1000)
+            else:
+                raise ValueError("Messages in SQS cannot be delayed for longer than 15 minutes.")
+
+        encoded_message = b64encode(message.encode()).decode()
+        if len(encoded_message) > MAX_MESSAGE_SIZE:
+            raise RuntimeError("Messages in SQS can be at most 256KiB large.")
+
+        self.logger.debug("Enqueueing message %r on queue %r.", message.message_id, queue_name)
+        self.emit_before("enqueue", message, delay)
+
+        if queue_name.endswith('.fifo'):
+            queue.send_message(
+                MessageBody=encoded_message,
+                MessageGroupId=4,  # 4 is a great number
+            )
+        else:
+            queue.send_message(
+                MessageBody=encoded_message,
+                DelaySeconds=delay_seconds,
+            )
         self.emit_after("enqueue", message, delay)
         return message
 
